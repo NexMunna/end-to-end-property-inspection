@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "deploy": "zip -r function.zip . -x \"node_modules/*\" \".git/*\"",
+    "deploy": "powershell -File deploy.ps1",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
