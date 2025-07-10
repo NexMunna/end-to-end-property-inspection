@@ -1,555 +1,857 @@
 /**
- * Property Stewards – Inspector Interface System
- * DigitalOcean Function Handler
+ * Main webhook handler for Property Stewards Inspector Interface
+ * Processes incoming WhatsApp messages via WhatsApp Business API
  */
 
-// Import required modules
-const db = require('./db');
+const whatsapp = require('./whatsapp');
 const openai = require('./openai');
-const wassenger = require('./wassenger');
-const pdfGenerator = require('./utils/pdf');
-const { format } = require('date-fns');
-require('dotenv').config();
+const db = require('./db');
+const { generatePDF } = require('./utils/pdf');
 
 /**
- * Process WhatsApp text message
- * 
- * @param {Object} message - Parsed message data
- * @returns {Promise<Object>} - Response to send
+ * Process webhook requests from WhatsApp Business API
+ * @param {Object} req - HTTP request object
+ * @param {Object} res - HTTP response object
  */
-async function processTextMessage(message) {
-  // Find inspector by WhatsApp ID
-  const inspector = await db.findInspectorByWhatsAppId(message.sender);
-  
-  if (!inspector) {
-    return {
-      text: "Sorry, your number is not registered as an inspector in our system. Please contact your administrator."
-    };
-  }
-  
-  // Get or create conversation
-  const conversation = await db.getOrCreateConversation(inspector.id);
-  
-  // Parse context from conversation
-  let context = {};
+async function handleWebhook(req, res) {
   try {
-    context = JSON.parse(conversation.context);
-  } catch (error) {
-    console.warn('Could not parse conversation context, starting fresh');
-    context = {};
-  }
-  
-  // Extract intent using OpenAI
-  const { intentData, context: updatedContext } = await openai.extractIntent(
-    message.content,
-    context
-  );
-  
-  // Store message in database
-  await db.storeMessage({
-    conversation_id: conversation.id,
-    sender_id: inspector.id,
-    message_type: 'text',
-    content: message.content,
-    whatsapp_message_id: message.messageId
-  });
-  
-  // Process intent
-  let responseData = {};
-  
-  switch (intentData.intent) {
-    case 'greeting':
-      responseData = {
-        text: `Hello ${inspector.name}! How can I assist you with your property inspections today?`
-      };
-      break;
+    console.log('📩 Received webhook request');
     
-    case 'view_jobs':
-      // Get today's date or specified date
-      const today = format(new Date(), 'yyyy-MM-dd');
-      const targetDate = intentData.params?.date || today;
+    // Handle WhatsApp verification request
+    if (req.method === 'GET') {
+      const mode = req.query['hub.mode'];
+      const token = req.query['hub.verify_token'];
+      const challenge = req.query['hub.challenge'];
       
-      const workOrders = await db.getInspectorWorkOrders(inspector.id, targetDate);
+      const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
       
-      if (workOrders.length === 0) {
-        responseData = {
-          text: `You have no scheduled inspections for ${targetDate}.`
-        };
+      if (mode === 'subscribe' && token === verifyToken) {
+        console.log('✅ Webhook verified');
+        return res.status(200).send(challenge);
       } else {
-        // Format work orders for display
-        const formattedDate = format(new Date(targetDate), 'MMMM d, yyyy');
-        let message = `You have ${workOrders.length} inspection(s) scheduled for ${formattedDate}:\n\n`;
-        
-        workOrders.forEach((wo, index) => {
-          message += `${index + 1}. *Work Order #${wo.id}*\n`;
-          message += `📍 ${wo.address}, ${wo.city}, ${wo.state}\n`;
-          message += `🕒 ${wo.scheduled_time_window}\n`;
-          message += `📋 ${wo.checklist_template_name}\n`;
-          message += `📱 Customer: ${wo.customer_name} (${wo.customer_phone})\n`;
-          message += `Status: ${wo.status.toUpperCase().replace('_', ' ')}\n\n`;
-        });
-        
-        message += "To start an inspection, reply with: 'Start inspection #[number]'";
-        
-        responseData = { text: message };
+        console.error('❌ Webhook verification failed');
+        return res.status(403).send('Verification failed');
       }
-      break;
+    }
     
-    case 'start_inspection':
-      const workOrderId = intentData.params?.workOrderId;
+    // Process incoming message
+    if (req.method === 'POST') {
+      const payload = req.body;
       
-      if (!workOrderId) {
-        responseData = {
-          text: "Please specify which inspection you'd like to start by providing the work order number."
-        };
-        break;
+      // Parse the webhook payload
+      const message = whatsapp.parseWebhookPayload(payload);
+      
+      // Handle verification messages
+      if (message?.isVerification) {
+        return res.status(200).send(message.challenge);
       }
       
-      try {
-        // Get work order details to ensure it belongs to this inspector
-        const workOrderDetails = await db.getWorkOrderDetails(workOrderId);
-        
-        if (!workOrderDetails || workOrderDetails.workOrder.inspector_id !== inspector.id) {
-          responseData = {
-            text: `Work order #${workOrderId} is not assigned to you or doesn't exist.`
-          };
-          break;
-        }
-        
-        if (workOrderDetails.workOrder.status === 'completed') {
-          responseData = {
-            text: `Work order #${workOrderId} has already been completed.`
-          };
-          break;
-        }
-        
-        // Start the inspection
-        const checklist = await db.startInspection(workOrderId);
-        
-        // Update conversation context
-        updatedContext.currentWorkOrder = workOrderId;
-        updatedContext.currentChecklistItem = null;
-        
-        // Format checklist for display
-        let message = `✅ *Inspection #${workOrderId} started!*\n\n`;
-        message += `📍 ${workOrderDetails.workOrder.address}, ${workOrderDetails.workOrder.city}\n\n`;
-        message += `Here's your checklist:\n\n`;
-        
-        checklist.items.forEach((item, index) => {
-          message += `${index + 1}. ${item.name}\n`;
-        });
-        
-        message += "\nTo update an item, send: 'Update item #[number]'";
-        
-        responseData = { text: message };
-      } catch (error) {
-        console.error('Error starting inspection:', error);
-        responseData = {
-          text: `Sorry, there was an error starting inspection #${workOrderId}. Please try again.`
-        };
+      // Ignore if no message found
+      if (!message) {
+        return res.status(200).send('No message found');
       }
-      break;
+      
+      // Process the message
+      await processMessage(message);
+      
+      // Acknowledge receipt
+      return res.status(200).send('OK');
+    }
     
-    case 'update_item':
-      const itemNumber = intentData.params?.itemNumber;
-      
-      if (!updatedContext.currentWorkOrder) {
-        responseData = {
-          text: "You need to start an inspection first before updating checklist items."
-        };
-        break;
-      }
-      
-      if (!itemNumber) {
-        responseData = {
-          text: "Please specify which checklist item you'd like to update by providing the item number."
-        };
-        break;
-      }
-      
-      try {
-        // Get the checklist
-        const checklist = await db.getWorkOrderChecklist(updatedContext.currentWorkOrder);
-        
-        // Validate item number
-        if (itemNumber < 1 || itemNumber > checklist.items.length) {
-          responseData = {
-            text: `Invalid item number. Please choose a number between 1 and ${checklist.items.length}.`
-          };
-          break;
-        }
-        
-        const selectedItem = checklist.items[itemNumber - 1];
-        
-        // Update conversation context
-        updatedContext.currentChecklistItem = selectedItem.id;
-        
-        // Format item details for display
-        let message = `*Item #${itemNumber}: ${selectedItem.name}*\n\n`;
-        message += `${selectedItem.description || 'No description provided'}\n\n`;
-        message += `Current status: ${selectedItem.status.toUpperCase().replace('_', ' ')}\n`;
-        
-        if (selectedItem.comments) {
-          message += `Comments: ${selectedItem.comments}\n`;
-        }
-        
-        if (selectedItem.media_count > 0) {
-          message += `Media items: ${selectedItem.media_count}\n`;
-        }
-        
-        message += "\nTo add a comment, reply with: 'Comment: [your comment]'\n";
-        message += "To mark as completed, reply with: 'Complete'\n";
-        message += "To mark as having issues, reply with: 'Issue: [describe the issue]'\n";
-        message += "To attach photos/videos, simply send the media with a caption.\n";
-        
-        responseData = { text: message };
-      } catch (error) {
-        console.error('Error updating item:', error);
-        responseData = {
-          text: "Sorry, there was an error retrieving the checklist item. Please try again."
-        };
-      }
-      break;
+    // Unsupported method
+    return res.status(405).send('Method not allowed');
+  } catch (error) {
+    console.error('❌ Error processing webhook:', error);
+    return res.status(500).send('Internal server error');
+  }
+}
+
+/**
+ * Process incoming WhatsApp message
+ * @param {Object} message - Parsed message from WhatsApp Business API
+ */
+async function processMessage(message) {
+  try {
+    console.log(`📱 Processing message from ${message.from}`);
     
-    case 'add_comment':
-      if (!updatedContext.currentWorkOrder || !updatedContext.currentChecklistItem) {
-        responseData = {
-          text: "Please select a checklist item first before adding a comment."
-        };
-        break;
-      }
-      
+    // Get or create user by WhatsApp ID
+    const [user] = await db.query(
+      'SELECT * FROM users WHERE whatsapp_id = ?',
+      [message.from]
+    );
+    
+    if (!user || user.length === 0) {
+      console.log(`ℹ️ New user with WhatsApp ID ${message.from}`);
+      // For new users, we might want to initiate an onboarding flow
+      // This is simplified - in production you'd have a more robust onboarding process
+      await whatsapp.sendTextMessage(
+        message.from,
+        'Welcome to Property Stewards! You are not registered in our system yet. Please contact your administrator to get set up.'
+      );
+      return;
+    }
+    
+    // Get active conversation or create new one
+    const [conversation] = await db.query(
+      `SELECT * FROM conversations 
+       WHERE user_id = ? AND active = TRUE 
+       ORDER BY last_message_at DESC LIMIT 1`,
+      [user[0].id]
+    );
+    
+    let conversationId;
+    let conversationContext = {};
+    
+    if (!conversation || conversation.length === 0) {
+      // Create new conversation
+      const [newConversation] = await db.query(
+        'INSERT INTO conversations (user_id, context, active) VALUES (?, ?, TRUE)',
+        [user[0].id, JSON.stringify({})]
+      );
+      conversationId = newConversation.insertId;
+    } else {
+      conversationId = conversation[0].id;
+      conversationContext = JSON.parse(conversation[0].context || '{}');
+    }
+    
+    // Store incoming message
+    const [storedMessage] = await db.query(
+      `INSERT INTO messages (conversation_id, sender_id, message_type, content, whatsapp_message_id, sent_at)
+       VALUES (?, ?, ?, ?, ?, FROM_UNIXTIME(? / 1000))`,
+      [
+        conversationId,
+        user[0].id,
+        message.type,
+        message.text || message.caption || '',
+        message.messageId,
+        message.timestamp
+      ]
+    );
+    
+    // If message has media, download and store it
+    let mediaId = null;
+    if (message.mediaId) {
       try {
-        const comment = intentData.params?.comment || '';
-        
-        if (!comment) {
-          responseData = {
-            text: "Please provide a comment to add to this item."
-          };
-          break;
-        }
-        
-        // Get current item
-        const checklistItem = await db.getOne(`
-          SELECT * FROM checklist_instance_items WHERE id = ?
-        `, [updatedContext.currentChecklistItem]);
-        
-        // Update the item with the comment
-        await db.updateChecklistItem(
-          updatedContext.currentChecklistItem,
-          checklistItem.status, // keep existing status
-          comment
+        const mediaContent = await whatsapp.downloadMedia(message.mediaId);
+        const [media] = await db.query(
+          `INSERT INTO media (checklist_instance_item_id, media_type, file_name, content_type, content)
+           VALUES (?, ?, ?, ?, ?)`,
+          [
+            // We'll need to get the checklist_instance_item_id from context
+            // For now, use a placeholder value that we'll update later
+            conversationContext.currentItemId || null,
+            message.type,
+            `${message.mediaId}.${message.mimeType.split('/')[1]}`,
+            message.mimeType,
+            mediaContent
+          ]
         );
         
-        responseData = {
-          text: "✅ Comment added successfully!"
-        };
-      } catch (error) {
-        console.error('Error adding comment:', error);
-        responseData = {
-          text: "Sorry, there was an error adding your comment. Please try again."
-        };
-      }
-      break;
-    
-    case 'complete_item':
-      if (!updatedContext.currentWorkOrder || !updatedContext.currentChecklistItem) {
-        responseData = {
-          text: "Please select a checklist item first."
-        };
-        break;
-      }
-      
-      try {
-        // Update the item status
-        await db.updateChecklistItem(
-          updatedContext.currentChecklistItem,
-          'completed',
-          null // keep existing comments
+        mediaId = media.insertId;
+        
+        // Update the message with media reference
+        await db.query(
+          'UPDATE messages SET media_id = ? WHERE id = ?',
+          [mediaId, storedMessage.insertId]
         );
+      } catch (error) {
+        console.error('❌ Failed to process media:', error);
+      }
+    }
+    
+    // Process message with OpenAI to determine intent
+    const messageContent = message.text || message.caption || '';
+    const openaiResponse = await openai.processMessage(
+      messageContent,
+      conversationContext,
+      user[0].role
+    );
+    
+    // Update conversation context with new information
+    const updatedContext = {
+      ...conversationContext,
+      ...openaiResponse.context,
+      lastIntent: openaiResponse.intent,
+      lastMessageId: storedMessage.insertId
+    };
+    
+    await db.query(
+      'UPDATE conversations SET context = ?, last_message_at = NOW() WHERE id = ?',
+      [JSON.stringify(updatedContext), conversationId]
+    );
+    
+    // Handle the intent
+    await handleIntent(message.from, openaiResponse, updatedContext, user[0], mediaId);
+  } catch (error) {
+    console.error('❌ Failed to process message:', error);
+    // Send error message to user
+    try {
+      await whatsapp.sendTextMessage(
+        message.from,
+        'Sorry, we encountered an error processing your message. Please try again later.'
+      );
+    } catch (sendError) {
+      console.error('❌ Failed to send error message:', sendError);
+    }
+  }
+}
+
+/**
+ * Handle the detected intent from the user's message
+ * @param {string} recipient - WhatsApp ID to send response to
+ * @param {Object} openaiResponse - Response from OpenAI with intent and data
+ * @param {Object} context - Current conversation context
+ * @param {Object} user - User info
+ * @param {number|null} mediaId - ID of uploaded media if applicable
+ */
+async function handleIntent(recipient, openaiResponse, context, user, mediaId) {
+  const { intent, response, data } = openaiResponse;
+  
+  try {
+    // Log the intent for debugging
+    console.log(`🧠 Detected intent: ${intent}`);
+    
+    // If we have a direct response from OpenAI, send it first
+    if (response) {
+      await whatsapp.sendTextMessage(recipient, response);
+    }
+    
+    // Handle different intents
+    switch (intent) {
+      case 'get_today_jobs':
+        await handleGetTodayJobs(recipient, user);
+        break;
         
-        // Get the checklist to see if all items are complete
-        const checklist = await db.getWorkOrderChecklist(updatedContext.currentWorkOrder);
-        const pendingItems = checklist.items.filter(item => item.status === 'pending');
+      case 'start_inspection':
+        await handleStartInspection(recipient, user, data.workOrderId);
+        break;
         
-        if (pendingItems.length === 0) {
-          responseData = {
-            text: "✅ Item marked as completed! All checklist items are now complete. You can complete the inspection by sending 'Complete inspection'."
-          };
+      case 'complete_item':
+        await handleCompleteItem(recipient, user, data.itemId, data.status, data.comments, mediaId);
+        break;
+        
+      case 'complete_inspection':
+        await handleCompleteInspection(recipient, user, data.checklistInstanceId);
+        break;
+        
+      case 'add_media':
+        if (mediaId) {
+          await handleAddMedia(recipient, user, data.itemId, mediaId);
         } else {
-          responseData = {
-            text: `✅ Item marked as completed! ${pendingItems.length} item(s) remaining.`
-          };
+          await whatsapp.sendTextMessage(recipient, "Please send a photo or video along with your comment.");
         }
-      } catch (error) {
-        console.error('Error completing item:', error);
-        responseData = {
-          text: "Sorry, there was an error completing this item. Please try again."
-        };
-      }
-      break;
-    
-    case 'issue_found':
-      if (!updatedContext.currentWorkOrder || !updatedContext.currentChecklistItem) {
-        responseData = {
-          text: "Please select a checklist item first."
-        };
         break;
-      }
-      
-      try {
-        const issue = intentData.params?.issue || '';
         
-        // Update the item status and add issue as comment
-        await db.updateChecklistItem(
-          updatedContext.currentChecklistItem,
-          'issue_found',
-          issue
-        );
-        
-        responseData = {
-          text: "⚠️ Item marked as having issues. Please add photos to document the issues."
-        };
-      } catch (error) {
-        console.error('Error marking issue:', error);
-        responseData = {
-          text: "Sorry, there was an error recording the issue. Please try again."
-        };
-      }
-      break;
-    
-    case 'complete_inspection':
-      if (!updatedContext.currentWorkOrder) {
-        responseData = {
-          text: "You need to start an inspection first before completing it."
-        };
+      case 'add_comment':
+        await handleAddComment(recipient, user, data.itemId, data.comment);
         break;
-      }
-      
-      try {
-        // Get the checklist to see if all items are addressed
-        const checklist = await db.getWorkOrderChecklist(updatedContext.currentWorkOrder);
-        const pendingItems = checklist.items.filter(item => item.status === 'pending');
         
-        if (pendingItems.length > 0) {
-          let message = `⚠️ You still have ${pendingItems.length} incomplete item(s). Please complete these items first:\n\n`;
-          
-          pendingItems.forEach((item, index) => {
-            message += `${index + 1}. ${item.name}\n`;
-          });
-          
-          responseData = { text: message };
-          break;
+      case 'help':
+        await sendHelpMessage(recipient);
+        break;
+        
+      default:
+        // Default response for unrecognized intents
+        if (!response) {
+          await whatsapp.sendTextMessage(
+            recipient,
+            "I'm not sure what you're asking for. Type 'help' to see what I can help you with."
+          );
         }
-        
-        // Complete the inspection
-        await db.completeInspection(updatedContext.currentWorkOrder);
-        
-        // Generate PDF report
-        await pdfGenerator.generateAndStoreReport(updatedContext.currentWorkOrder);
-        
-        // Reset context
-        updatedContext.currentWorkOrder = null;
-        updatedContext.currentChecklistItem = null;
-        
-        responseData = {
-          text: "🎉 Inspection completed successfully! The report has been generated and notifications have been sent to the customer and admin."
-        };
-      } catch (error) {
-        console.error('Error completing inspection:', error);
-        responseData = {
-          text: `Sorry, there was an error completing the inspection: ${error.message}`
-        };
-      }
-      break;
+    }
     
-    case 'cancel':
-      // Reset context
-      updatedContext.currentWorkOrder = null;
-      updatedContext.currentChecklistItem = null;
-      
-      responseData = {
-        text: "Operation cancelled. How else can I help you with your inspections today?"
-      };
-      break;
-    
-    case 'get_help':
-      responseData = {
-        text: `*Property Stewards - Inspector Help*
-
-Here are commands you can use:
-- "Show my jobs today" - View today's inspections
-- "Show jobs for [date]" - View inspections for a specific date
-- "Start inspection #[number]" - Begin an inspection
-- "Update item #[number]" - Select a checklist item to update
-- "Comment: [text]" - Add a comment to the current item
-- "Complete" - Mark current item as completed
-- "Issue: [text]" - Mark item as having issues
-- "Complete inspection" - Finish the current inspection
-- "Cancel" - Cancel the current operation
-- "Help" - Show this help message
-
-To add photos or videos, simply send them with a caption.`
-      };
-      break;
-    
-    default:
-      // Generate a more contextual response using OpenAI
-      const { message } = await openai.generateResponse(
-        intentData,
-        { inspectorName: inspector.name },
-        updatedContext
+    // Store system message with the response
+    if (response) {
+      const [conversation] = await db.query(
+        'SELECT id FROM conversations WHERE user_id = ? AND active = TRUE LIMIT 1',
+        [user.id]
       );
       
-      responseData = { text: message };
+      if (conversation && conversation.length > 0) {
+        await db.query(
+          'INSERT INTO messages (conversation_id, message_type, content, sent_at) VALUES (?, "system", ?, NOW())',
+          [conversation[0].id, response]
+        );
+      }
+    }
+  } catch (error) {
+    console.error(`❌ Failed to handle intent ${intent}:`, error);
+    await whatsapp.sendTextMessage(
+      recipient,
+      "Sorry, I encountered an error while processing your request. Please try again."
+    );
   }
-  
-  // Update conversation context in database
-  await db.updateConversationContext(conversation.id, updatedContext);
-  
-  return responseData;
 }
 
 /**
- * Process WhatsApp media message (image/video)
- * 
- * @param {Object} message - Parsed message data
- * @returns {Promise<Object>} - Response to send
+ * Handle getting today's jobs for an inspector
+ * @param {string} recipient - WhatsApp ID to send response to
+ * @param {Object} user - User info
  */
-async function processMediaMessage(message) {
-  // Find inspector by WhatsApp ID
-  const inspector = await db.findInspectorByWhatsAppId(message.sender);
-  
-  if (!inspector) {
-    return {
-      text: "Sorry, your number is not registered as an inspector in our system. Please contact your administrator."
-    };
-  }
-  
-  // Get conversation
-  const conversation = await db.getOrCreateConversation(inspector.id);
-  
-  // Parse context from conversation
-  let context = {};
+async function handleGetTodayJobs(recipient, user) {
   try {
-    context = JSON.parse(conversation.context);
-  } catch (error) {
-    console.warn('Could not parse conversation context, starting fresh');
-    context = {};
-  }
-  
-  // Store message in database
-  await db.storeMessage({
-    conversation_id: conversation.id,
-    sender_id: inspector.id,
-    message_type: message.type,
-    content: message.caption,
-    whatsapp_message_id: message.messageId
-  });
-  
-  // If we don't have an active checklist item, ask the user to select one
-  if (!context.currentWorkOrder || !context.currentChecklistItem) {
-    return {
-      text: "Please select a checklist item first before sending media. Use 'Update item #[number]' to select an item."
-    };
-  }
-  
-  try {
-    // Process the caption to determine intent
-    const { intentData, context: updatedContext } = await openai.processMediaMessage(
-      message.caption,
-      message.type,
-      context
+    // Only applicable for inspectors
+    if (user.role !== 'inspector') {
+      await whatsapp.sendTextMessage(
+        recipient,
+        "This feature is only available to inspectors."
+      );
+      return;
+    }
+    
+    // Get today's work orders for the inspector
+    const today = new Date().toISOString().split('T')[0];
+    const [workOrders] = await db.query(
+      `SELECT wo.id, wo.scheduled_time_start, wo.scheduled_time_end, 
+              p.address_line1, p.city, p.state, p.zip,
+              c.first_name AS customer_first_name, c.last_name AS customer_last_name
+       FROM work_orders wo
+       JOIN contracts ct ON wo.contract_id = ct.id
+       JOIN properties p ON ct.property_id = p.id
+       JOIN users c ON ct.customer_id = c.id
+       WHERE wo.inspector_id = ? AND wo.scheduled_date = ? AND wo.status IN ('scheduled', 'in_progress')
+       ORDER BY wo.scheduled_time_start`,
+      [user.id, today]
     );
     
-    // Download the media
-    const mediaBuffer = await wassenger.downloadMedia(message.mediaUrl);
+    if (!workOrders || workOrders.length === 0) {
+      await whatsapp.sendTextMessage(
+        recipient,
+        "You have no inspections scheduled for today."
+      );
+      return;
+    }
     
-    // Store the media in the database
-    const mediaId = await db.storeMedia(
-      context.currentChecklistItem,
-      message.type,
-      message.filename,
-      message.mimeType,
-      mediaBuffer
-    );
+    // Format the response
+    let response = `📋 *Your Inspections Today (${today})*\n\n`;
     
-    // Update the message with the media ID
-    await db.update('messages', { media_id: mediaId }, {
-      whatsapp_message_id: message.messageId
+    workOrders.forEach((wo, index) => {
+      const timeWindow = `${wo.scheduled_time_start?.substring(0, 5) || 'N/A'} - ${wo.scheduled_time_end?.substring(0, 5) || 'N/A'}`;
+      
+      response += `*${index + 1}. Work Order #${wo.id}*\n`;
+      response += `🕒 Time: ${timeWindow}\n`;
+      response += `📍 Location: ${wo.address_line1}, ${wo.city}, ${wo.state} ${wo.zip}\n`;
+      response += `👤 Customer: ${wo.customer_first_name} ${wo.customer_last_name}\n\n`;
     });
     
-    // Get media count for the item
-    const mediaCount = await db.getOne(`
-      SELECT COUNT(*) as count
-      FROM media
-      WHERE checklist_instance_item_id = ?
-    `, [context.currentChecklistItem]);
+    response += "To start an inspection, reply with 'Start inspection #' followed by the work order number.";
     
-    return {
-      text: `✅ ${message.type} uploaded successfully! You now have ${mediaCount.count} media item(s) for this checklist item.`
-    };
+    await whatsapp.sendTextMessage(recipient, response);
   } catch (error) {
-    console.error('Error processing media:', error);
-    return {
-      text: `Sorry, there was an error processing your ${message.type}. Please try again.`
-    };
+    console.error('❌ Failed to get today\'s jobs:', error);
+    await whatsapp.sendTextMessage(
+      recipient,
+      "Sorry, I couldn't retrieve your inspections for today. Please try again later."
+    );
   }
 }
 
 /**
- * Main handler for DigitalOcean Function
- * 
- * @param {Object} args - Request arguments
- * @returns {Object} - Response object
+ * Handle starting an inspection
+ * @param {string} recipient - WhatsApp ID to send response to
+ * @param {Object} user - User info
+ * @param {number} workOrderId - Work order ID
  */
-async function main(args) {
+async function handleStartInspection(recipient, user, workOrderId) {
   try {
-    console.log('Received webhook:', JSON.stringify(args));
+    // Verify the work order exists and is assigned to this inspector
+    const [workOrder] = await db.query(
+      `SELECT wo.*, ct.id AS contract_id, p.address_line1, p.city, p.state, p.zip,
+              cl.id AS checklist_id, cl.title AS checklist_title
+       FROM work_orders wo
+       JOIN contracts ct ON wo.contract_id = ct.id
+       JOIN properties p ON ct.property_id = p.id
+       JOIN checklists cl ON wo.checklist_id = cl.id
+       WHERE wo.id = ? AND wo.inspector_id = ?`,
+      [workOrderId, user.id]
+    );
     
-    // Parse webhook data
-    const message = wassenger.parseWebhookData(args);
-    
-    if (!message) {
-      return {
-        statusCode: 200,
-        body: { message: 'Not a valid or incoming message event' }
-      };
+    if (!workOrder || workOrder.length === 0) {
+      await whatsapp.sendTextMessage(
+        recipient,
+        `Work order #${workOrderId} is not assigned to you or does not exist.`
+      );
+      return;
     }
     
-    console.log('Parsed message:', JSON.stringify(message));
+    const wo = workOrder[0];
     
-    // Process message based on type
-    let response;
-    if (message.type === 'chat') {
-      response = await processTextMessage(message);
-    } else if (['image', 'video', 'audio'].includes(message.type)) {
-      response = await processMediaMessage(message);
+    // Check if inspection is already in progress
+    let checklistInstanceId;
+    const [existingInstance] = await db.query(
+      'SELECT * FROM checklist_instances WHERE work_order_id = ?',
+      [workOrderId]
+    );
+    
+    if (existingInstance && existingInstance.length > 0) {
+      // Inspection already exists
+      checklistInstanceId = existingInstance[0].id;
+      
+      if (existingInstance[0].status === 'completed') {
+        await whatsapp.sendTextMessage(
+          recipient,
+          `Inspection for work order #${workOrderId} has already been completed.`
+        );
+        return;
+      } else {
+        // Resume existing inspection
+        await db.query(
+          'UPDATE work_orders SET status = "in_progress" WHERE id = ?',
+          [workOrderId]
+        );
+        
+        await whatsapp.sendTextMessage(
+          recipient,
+          `Resuming inspection for work order #${workOrderId}.`
+        );
+      }
     } else {
-      response = {
-        text: `Sorry, I don't support ${message.type} messages yet. Please send text, images, or videos.`
+      // Start new inspection
+      const [newInstance] = await db.query(
+        `INSERT INTO checklist_instances (work_order_id, started_at, status) 
+         VALUES (?, NOW(), 'in_progress')`,
+        [workOrderId]
+      );
+      
+      checklistInstanceId = newInstance.insertId;
+      
+      // Update work order status
+      await db.query(
+        'UPDATE work_orders SET status = "in_progress" WHERE id = ?',
+        [workOrderId]
+      );
+      
+      await whatsapp.sendTextMessage(
+        recipient,
+        `Started inspection for work order #${workOrderId}.`
+      );
+    }
+    
+    // Get checklist items
+    const [checklistItems] = await db.query(
+      `SELECT ci.*
+       FROM checklist_items ci
+       WHERE ci.checklist_id = ?
+       ORDER BY ci.item_order`,
+      [wo.checklist_id]
+    );
+    
+    // Create checklist instance items if they don't exist
+    for (const item of checklistItems) {
+      const [existingItem] = await db.query(
+        `SELECT * FROM checklist_instance_items 
+         WHERE checklist_instance_id = ? AND checklist_item_id = ?`,
+        [checklistInstanceId, item.id]
+      );
+      
+      if (!existingItem || existingItem.length === 0) {
+        await db.query(
+          `INSERT INTO checklist_instance_items 
+           (checklist_instance_id, checklist_item_id, status)
+           VALUES (?, ?, 'pending')`,
+          [checklistInstanceId, item.id]
+        );
+      }
+    }
+    
+    // Send inspection details
+    let response = `🏠 *Inspection Details*\n\n`;
+    response += `📍 Location: ${wo.address_line1}, ${wo.city}, ${wo.state} ${wo.zip}\n`;
+    response += `📋 Checklist: ${wo.checklist_title}\n\n`;
+    response += `*Checklist Items:*\n`;
+    
+    checklistItems.forEach((item, index) => {
+      response += `${index + 1}. ${item.title}\n`;
+    });
+    
+    response += `\nTo inspect an item, say "Inspect item #" followed by the item number.`;
+    
+    await whatsapp.sendTextMessage(recipient, response);
+    
+    // Update conversation context
+    const [conversation] = await db.query(
+      'SELECT * FROM conversations WHERE user_id = ? AND active = TRUE LIMIT 1',
+      [user.id]
+    );
+    
+    if (conversation && conversation.length > 0) {
+      const context = JSON.parse(conversation[0].context || '{}');
+      const updatedContext = {
+        ...context,
+        currentWorkOrderId: workOrderId,
+        currentChecklistInstanceId: checklistInstanceId,
+        currentChecklistItems: checklistItems.map(item => ({
+          id: item.id,
+          title: item.title
+        }))
       };
+      
+      await db.query(
+        'UPDATE conversations SET context = ? WHERE id = ?',
+        [JSON.stringify(updatedContext), conversation[0].id]
+      );
     }
-    
-    // Send response via WhatsApp
-    if (response.text) {
-      await wassenger.sendTextMessage(message.sender, response.text);
-    }
-    
-    return {
-      statusCode: 200,
-      body: { success: true }
-    };
   } catch (error) {
-    console.error('Error processing webhook:', error);
-    
-    return {
-      statusCode: 500,
-      body: { error: 'Internal server error' }
-    };
+    console.error('❌ Failed to start inspection:', error);
+    await whatsapp.sendTextMessage(
+      recipient,
+      "Sorry, I couldn't start the inspection. Please try again later."
+    );
   }
+}
+
+/**
+ * Handle completing a checklist item
+ * @param {string} recipient - WhatsApp ID to send response to
+ * @param {Object} user - User info
+ * @param {number} itemId - Checklist item ID
+ * @param {string} status - Item status (completed, skipped, issue_found)
+ * @param {string} comments - Comments for the item
+ * @param {number|null} mediaId - ID of uploaded media if applicable
+ */
+async function handleCompleteItem(recipient, user, itemId, status, comments, mediaId) {
+  try {
+    // Verify the checklist item exists and belongs to this inspector's active inspection
+    const [checklistItem] = await db.query(
+      `SELECT cii.*, ci.id AS instance_id, wo.id AS work_order_id
+       FROM checklist_instance_items cii
+       JOIN checklist_instances ci ON cii.checklist_instance_id = ci.id
+       JOIN work_orders wo ON ci.work_order_id = wo.id
+       WHERE cii.id = ? AND wo.inspector_id = ? AND ci.status = 'in_progress'`,
+      [itemId, user.id]
+    );
+    
+    if (!checklistItem || checklistItem.length === 0) {
+      await whatsapp.sendTextMessage(
+        recipient,
+        `Checklist item #${itemId} is not part of your active inspection.`
+      );
+      return;
+    }
+    
+    // Update item status
+    await db.query(
+      `UPDATE checklist_instance_items
+       SET status = ?, comments = ?, completed_at = NOW()
+       WHERE id = ?`,
+      [status, comments, itemId]
+    );
+    
+    // If media was uploaded, link it to this checklist item
+    if (mediaId) {
+      await db.query(
+        'UPDATE media SET checklist_instance_item_id = ? WHERE id = ?',
+        [itemId, mediaId]
+      );
+    }
+    
+    await whatsapp.sendTextMessage(
+      recipient,
+      `✅ Item marked as ${status}.`
+    );
+    
+    // Check if all items are completed
+    const [checklistItems] = await db.query(
+      `SELECT COUNT(*) AS total, 
+              SUM(CASE WHEN status != 'pending' THEN 1 ELSE 0 END) AS completed
+       FROM checklist_instance_items
+       WHERE checklist_instance_id = ?`,
+      [checklistItem[0].instance_id]
+    );
+    
+    if (checklistItems[0].total === checklistItems[0].completed) {
+      await whatsapp.sendTextMessage(
+        recipient,
+        "All items in the checklist have been completed. You can now complete the inspection by saying 'Complete inspection'."
+      );
+    } else {
+      // Get the next pending item
+      const [nextItem] = await db.query(
+        `SELECT cii.id, ci.title
+         FROM checklist_instance_items cii
+         JOIN checklist_items ci ON cii.checklist_item_id = ci.id
+         WHERE cii.checklist_instance_id = ? AND cii.status = 'pending'
+         ORDER BY ci.item_order
+         LIMIT 1`,
+        [checklistItem[0].instance_id]
+      );
+      
+      if (nextItem && nextItem.length > 0) {
+        await whatsapp.sendTextMessage(
+          recipient,
+          `Next item: ${nextItem[0].title} (Item #${nextItem[0].id})`
+        );
+      }
+    }
+  } catch (error) {
+    console.error('❌ Failed to complete checklist item:', error);
+    await whatsapp.sendTextMessage(
+      recipient,
+      "Sorry, I couldn't update the checklist item. Please try again later."
+    );
+  }
+}
+
+/**
+ * Handle completing an entire inspection
+ * @param {string} recipient - WhatsApp ID to send response to
+ * @param {Object} user - User info
+ * @param {number} checklistInstanceId - Checklist instance ID
+ */
+async function handleCompleteInspection(recipient, user, checklistInstanceId) {
+  try {
+    // Verify the checklist instance exists and belongs to this inspector
+    const [checklistInstance] = await db.query(
+      `SELECT ci.*, wo.id AS work_order_id
+       FROM checklist_instances ci
+       JOIN work_orders wo ON ci.work_order_id = wo.id
+       WHERE ci.id = ? AND wo.inspector_id = ? AND ci.status = 'in_progress'`,
+      [checklistInstanceId, user.id]
+    );
+    
+    if (!checklistInstance || checklistInstance.length === 0) {
+      await whatsapp.sendTextMessage(
+        recipient,
+        `Checklist instance #${checklistInstanceId} is not part of your active inspections.`
+      );
+      return;
+    }
+    
+    // Check if all items are completed
+    const [checklistItems] = await db.query(
+      `SELECT COUNT(*) AS total, 
+              SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending
+       FROM checklist_instance_items
+       WHERE checklist_instance_id = ?`,
+      [checklistInstanceId]
+    );
+    
+    if (checklistItems[0].pending > 0) {
+      await whatsapp.sendTextMessage(
+        recipient,
+        `You still have ${checklistItems[0].pending} pending items. Please complete all items before completing the inspection.`
+      );
+      return;
+    }
+    
+    // Mark checklist instance as completed
+    await db.query(
+      'UPDATE checklist_instances SET status = "completed", completed_at = NOW() WHERE id = ?',
+      [checklistInstanceId]
+    );
+    
+    // Mark work order as completed
+    await db.query(
+      'UPDATE work_orders SET status = "completed", completed_at = NOW() WHERE id = ?',
+      [checklistInstance[0].work_order_id]
+    );
+    
+    await whatsapp.sendTextMessage(
+      recipient,
+      "✅ Inspection completed successfully!"
+    );
+    
+    // Generate PDF report
+    try {
+      const pdfBuffer = await generatePDF(checklistInstanceId);
+      
+      // Store the report
+      await db.query(
+        `INSERT INTO reports (work_order_id, report_file, generated_at)
+         VALUES (?, ?, NOW())
+         ON DUPLICATE KEY UPDATE report_file = ?, generated_at = NOW()`,
+        [checklistInstance[0].work_order_id, pdfBuffer, pdfBuffer]
+      );
+      
+      // Send notification to admin
+      const [admins] = await db.query(
+        'SELECT * FROM users WHERE role = "admin"'
+      );
+      
+      if (admins && admins.length > 0) {
+        for (const admin of admins) {
+          await db.query(
+            `INSERT INTO notifications (user_id, notification_type, message, 
+                                      related_entity_type, related_entity_id, status)
+             VALUES (?, "system", ?, "work_order", ?, "pending")`,
+            [
+              admin.id,
+              `Work order #${checklistInstance[0].work_order_id} has been completed by ${user.first_name} ${user.last_name}.`,
+              checklistInstance[0].work_order_id
+            ]
+          );
+        }
+      }
+      
+      // If admin has WhatsApp, notify them
+      for (const admin of admins) {
+        if (admin.whatsapp_id) {
+          await whatsapp.sendTextMessage(
+            admin.whatsapp_id,
+            `🔔 *Inspection Completed*\n\nWork order #${checklistInstance[0].work_order_id} has been completed by ${user.first_name} ${user.last_name}.\n\nThe report is available in the system.`
+          );
+        }
+      }
+      
+      await whatsapp.sendTextMessage(
+        recipient,
+        "📄 Report generated and notifications sent to admin."
+      );
+    } catch (error) {
+      console.error('❌ Failed to generate report:', error);
+      await whatsapp.sendTextMessage(
+        recipient,
+        "Inspection marked as complete, but there was an issue generating the report. An administrator will review it."
+      );
+    }
+    
+    // Clear conversation context
+    const [conversation] = await db.query(
+      'SELECT * FROM conversations WHERE user_id = ? AND active = TRUE LIMIT 1',
+      [user.id]
+    );
+    
+    if (conversation && conversation.length > 0) {
+      await db.query(
+        'UPDATE conversations SET context = "{}", active = FALSE WHERE id = ?',
+        [conversation[0].id]
+      );
+    }
+  } catch (error) {
+    console.error('❌ Failed to complete inspection:', error);
+    await whatsapp.sendTextMessage(
+      recipient,
+      "Sorry, I couldn't complete the inspection. Please try again later."
+    );
+  }
+}
+
+/**
+ * Handle adding media to a checklist item
+ * @param {string} recipient - WhatsApp ID to send response to
+ * @param {Object} user - User info
+ * @param {number} itemId - Checklist instance item ID
+ * @param {number} mediaId - ID of the uploaded media
+ */
+async function handleAddMedia(recipient, user, itemId, mediaId) {
+  try {
+    // Verify the checklist item exists and belongs to this inspector's active inspection
+    const [checklistItem] = await db.query(
+      `SELECT cii.*, ci.id AS instance_id, wo.id AS work_order_id
+       FROM checklist_instance_items cii
+       JOIN checklist_instances ci ON cii.checklist_instance_id = ci.id
+       JOIN work_orders wo ON ci.work_order_id = wo.id
+       WHERE cii.id = ? AND wo.inspector_id = ? AND ci.status = 'in_progress'`,
+      [itemId, user.id]
+    );
+    
+    if (!checklistItem || checklistItem.length === 0) {
+      await whatsapp.sendTextMessage(
+        recipient,
+        `Checklist item #${itemId} is not part of your active inspection.`
+      );
+      return;
+    }
+    
+    // Update the media record with the checklist item ID
+    await db.query(
+      'UPDATE media SET checklist_instance_item_id = ? WHERE id = ?',
+      [itemId, mediaId]
+    );
+    
+    await whatsapp.sendTextMessage(
+      recipient,
+      "✅ Media added to the checklist item."
+    );
+  } catch (error) {
+    console.error('❌ Failed to add media:', error);
+    await whatsapp.sendTextMessage(
+      recipient,
+      "Sorry, I couldn't add the media to the checklist item. Please try again later."
+    );
+  }
+}
+
+/**
+ * Handle adding a comment to a checklist item
+ * @param {string} recipient - WhatsApp ID to send response to
+ * @param {Object} user - User info
+ * @param {number} itemId - Checklist instance item ID
+ * @param {string} comment - Comment text
+ */
+async function handleAddComment(recipient, user, itemId, comment) {
+  try {
+    // Verify the checklist item exists and belongs to this inspector's active inspection
+    const [checklistItem] = await db.query(
+      `SELECT cii.*, ci.id AS instance_id, wo.id AS work_order_id
+       FROM checklist_instance_items cii
+       JOIN checklist_instances ci ON cii.checklist_instance_id = ci.id
+       JOIN work_orders wo ON ci.work_order_id = wo.id
+       WHERE cii.id = ? AND wo.inspector_id = ? AND ci.status = 'in_progress'`,
+      [itemId, user.id]
+    );
+    
+    if (!checklistItem || checklistItem.length === 0) {
+      await whatsapp.sendTextMessage(
+        recipient,
+        `Checklist item #${itemId} is not part of your active inspection.`
+      );
+      return;
+    }
+    
+    // Update the comments
+    const existingComments = checklistItem[0].comments || '';
+    const updatedComments = existingComments ? `${existingComments}\n\n${comment}` : comment;
+    
+    await db.query(
+      'UPDATE checklist_instance_items SET comments = ? WHERE id = ?',
+      [updatedComments, itemId]
+    );
+    
+    await whatsapp.sendTextMessage(
+      recipient,
+      "✅ Comment added to the checklist item."
+    );
+  } catch (error) {
+    console.error('❌ Failed to add comment:', error);
+    await whatsapp.sendTextMessage(
+      recipient,
+      "Sorry, I couldn't add the comment to the checklist item. Please try again later."
+    );
+  }
+}
+
+/**
+ * Send help message with available commands
+ * @param {string} recipient - WhatsApp ID to send response to
+ */
+async function sendHelpMessage(recipient) {
+  const helpMessage = `
+🔍 *Property Stewards Inspector Help*
+
+Here are commands you can use:
+
+*Work Orders*
+• "Today's jobs" - List today's scheduled inspections
+• "Start inspection #123" - Start/resume inspection for work order #123
+
+*During Inspection*
+• "Inspect item #5" - View details for item #5
+• "Complete item #5 [status]" - Mark item as completed, skipped, or issue found
+• "Add photo to item #5" - Add a photo to item #5 (send with a photo)
+• "Add comment to item #5: [your comment]" - Add a comment
+• "Complete inspection" - Finalize and submit inspection
+
+*Other Commands*
+• "Help" - Show this help message
+• "Cancel" - Cancel current operation
+
+Send a message with your question if you need more assistance.
+`;
+
+  await whatsapp.sendTextMessage(recipient, helpMessage);
 }
 
 module.exports = {
-  main
+  handleWebhook
 };

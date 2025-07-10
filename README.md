@@ -89,6 +89,43 @@ When setting up Wassenger:
 4. If you have multiple devices, copy your device ID to the WASSENGER_DEVICE_ID environment variable
 5. Configure the webhook URL in your Wassenger dashboard to point to your deployed function
 
+## WhatsApp Business API Setup
+
+This system uses the WhatsApp Business API directly instead of Wassenger. Follow these steps to set it up:
+
+1. **Create a Meta Developer Account**:
+   - Visit [Meta for Developers](https://developers.facebook.com/)
+   - Create an account if you don't have one
+
+2. **Create a Meta App**:
+   - Go to [My Apps](https://developers.facebook.com/apps/)
+   - Click "Create App"
+   - Select "Business" type
+   - Complete the setup process
+
+3. **Set Up WhatsApp Business**:
+   - From your app dashboard, click "Add Products"
+   - Select "WhatsApp"
+   - Follow the guided setup process
+   - Get your test phone number or request access to production
+
+4. **Configure Webhooks**:
+   - Go to "WhatsApp > Configuration"
+   - Under Webhooks, add your webhook URL (your deployed DigitalOcean Function URL)
+   - Set a verify token (can be any string you choose)
+   - Select the subscription fields: messages, message_status_updates
+
+5. **Update Environment Variables**:
+   - Update your `.env` file with:
+     - `WHATSAPP_PHONE_NUMBER_ID`: Found in WhatsApp > Getting Started
+     - `WHATSAPP_BUSINESS_ACCOUNT_ID`: Found in WhatsApp > API Setup
+     - `WHATSAPP_ACCESS_TOKEN`: Generate a new token in App Dashboard > Settings > Basic
+     - `WHATSAPP_VERIFY_TOKEN`: The verify token you set for your webhook
+
+6. **Test Your Integration**:
+   - Use the "Send Test Message" feature in the Meta dashboard
+   - Or send a message to your WhatsApp number from a registered test number
+
 ## Architecture
 
 - `index.js` - Function entry point
