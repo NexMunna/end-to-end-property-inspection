@@ -3,6 +3,7 @@
  * Processes incoming WhatsApp messages via WhatsApp Business API
  */
 
+const { parseWhatsAppPayload } = require('./parser');
 const whatsapp = require('./whatsapp');
 const openai = require('./openai');
 const db = require('./db');
@@ -17,7 +18,7 @@ async function handleWebhook(req, res) {
   try {
     console.log('📩 Received webhook request');
     
-    // Handle WhatsApp verification request
+    // Handle WhatsApp Business API verification request (GET method)
     if (req.method === 'GET') {
       const mode = req.query['hub.mode'];
       const token = req.query['hub.verify_token'];
@@ -26,43 +27,65 @@ async function handleWebhook(req, res) {
       const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
       
       if (mode === 'subscribe' && token === verifyToken) {
-        console.log('✅ Webhook verified');
+        console.log('✅ WhatsApp webhook verified successfully');
         return res.status(200).send(challenge);
       } else {
-        console.error('❌ Webhook verification failed');
+        console.error('❌ WhatsApp webhook verification failed');
         return res.status(403).send('Verification failed');
       }
     }
     
-    // Process incoming message
+    // Process incoming message (POST method)
     if (req.method === 'POST') {
       const payload = req.body;
+      const parsedData = parseWhatsAppPayload(payload);
       
-      // Parse the webhook payload
-      const message = whatsapp.parseWebhookPayload(payload);
-      
-      // Handle verification messages
-      if (message?.isVerification) {
-        return res.status(200).send(message.challenge);
+      // Handle different types of webhook data
+      if (!parsedData) {
+        console.log('No actionable data in webhook payload');
+        return res.status(200).send('OK');
       }
       
-      // Ignore if no message found
-      if (!message) {
-        return res.status(200).send('No message found');
+      // Handle verification challenges that might come as POST
+      if (parsedData.isVerification) {
+        return res.status(200).send(parsedData.challenge);
       }
       
-      // Process the message
-      await processMessage(message);
+      // Handle message status updates
+      if (parsedData.isStatus) {
+        await handleStatusUpdate(parsedData);
+        return res.status(200).send('OK');
+      }
       
-      // Acknowledge receipt
+      // Handle regular messages
+      await processMessage(parsedData);
+      
+      // Always return 200 OK quickly to acknowledge receipt
       return res.status(200).send('OK');
     }
     
-    // Unsupported method
+    // Handle other HTTP methods
     return res.status(405).send('Method not allowed');
   } catch (error) {
-    console.error('❌ Error processing webhook:', error);
+    console.error('❌ Error in webhook handler:', error);
     return res.status(500).send('Internal server error');
+  }
+}
+
+/**
+ * Process status updates (message delivered, read, etc.)
+ */
+async function handleStatusUpdate(statusData) {
+  try {
+    console.log(`📊 Message status update: ${statusData.status} for ID ${statusData.messageId}`);
+    
+    // Update message status in database if needed
+    await db.query(
+      `UPDATE messages SET delivery_status = ? WHERE whatsapp_message_id = ?`,
+      [statusData.status, statusData.messageId]
+    );
+  } catch (error) {
+    console.error('❌ Error handling status update:', error);
   }
 }
 
@@ -831,7 +854,7 @@ async function sendHelpMessage(recipient) {
 
 Here are commands you can use:
 
-*Work Orders*
+*Work Orders**
 • "Today's jobs" - List today's scheduled inspections
 • "Start inspection #123" - Start/resume inspection for work order #123
 
