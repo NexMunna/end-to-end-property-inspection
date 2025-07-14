@@ -11,7 +11,8 @@
     "dev": "nodemon index.js",
     "deploy": "powershell -Command \"Get-ChildItem -Exclude node_modules,.git,.github,.env,function.zip,package.zip | Compress-Archive -DestinationPath function.zip -Force; Get-ChildItem function.zip | Select-Object Name, Length\"",
     "deploy:unix": "zip -r function.zip * -x \"node_modules/*\" \".git/*\" \".env\" \"function.zip\" \"package.zip\"",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "db:setup": "node scripts/db-setup.js"
   },
   "keywords": [
     "property",
@@ -28,7 +29,7 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "form-data": "^4.0.0",
-    "mysql2": "^3.6.5",
+    "mysql2": "^3.14.2",
     "openai": "^4.28.0",
     "pdfkit": "^0.14.0"
   },
