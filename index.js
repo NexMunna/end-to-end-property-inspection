@@ -1,22 +1,22 @@
 /**
  * Property Stewards - Inspector Interface System
- * DigitalOcean Functions entry point
+ * Entry point for DigitalOcean Functions
  */
-
+require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const handler = require('./src/handler');
+const db = require('./src/db');
+const logger = require('./src/utils/logger');
 
 // Initialize Express app
 const app = express();
 
-// Parse JSON bodies for webhook events from WhatsApp Business API
-app.use(bodyParser.json());
+// Increase payload limit for media uploads
+app.use(bodyParser.json({ limit: '50mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 
-// Parse URL-encoded bodies for form submissions (if needed)
-app.use(bodyParser.urlencoded({ extended: true }));
-
-// Handle WhatsApp webhook verification and events
+// WhatsApp webhook endpoint
 app.all('/webhook', handler.handleWebhook);
 
 // Health check endpoint
@@ -34,20 +34,30 @@ app.use((req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
+  logger.error('Unhandled error:', err);
   res.status(500).send({
     error: 'Internal server error',
     message: 'An unexpected error occurred'
   });
 });
 
+// Test database connection before starting server (for local development)
+if (process.env.NODE_ENV !== 'production') {
+  (async function testDatabaseConnection() {
+    try {
+      await db.query('SELECT 1');
+      logger.info('Database connection successful');
+      
+      const PORT = process.env.PORT || 8080;
+      app.listen(PORT, () => {
+        logger.info(`Server running on port ${PORT}`);
+      });
+    } catch (error) {
+      logger.error('Database connection failed:', error);
+      process.exit(1);
+    }
+  })();
+}
+
 // For DigitalOcean Functions
 module.exports = app;
-
-// For local development
-if (process.env.NODE_ENV !== 'production') {
-  const PORT = process.env.PORT || 8080;
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-  });
-}

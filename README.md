@@ -89,6 +89,34 @@ When setting up Wassenger:
 4. If you have multiple devices, copy your device ID to the WASSENGER_DEVICE_ID environment variable
 5. Configure the webhook URL in your Wassenger dashboard to point to your deployed function
 
+## WhatsApp Integration
+
+The system supports two WhatsApp integration methods:
+
+### 1. Wassenger API
+Wassenger provides an easy way to connect WhatsApp to your business with a simplified API.
+
+**Configuration:**
+- Create a Wassenger account at [wassenger.com](https://wassenger.com)
+- Set up a WhatsApp device and generate an API key
+- Configure webhook URL in Wassenger dashboard to: `https://your-function-url.doserverless.co/webhook`
+- Set environment variables:
+WHATSAPP_PROVIDER=WASSENGER WASSENGER_API_KEY=your_api_key WASSENGER_DEVICE_ID=your_device_id
+
+
+### 2. WhatsApp Business API
+Official WhatsApp Business Cloud API from Meta.
+
+**Configuration:**
+- Create a Meta Developer account and WhatsApp Business account
+- Set up a WhatsApp app in the Meta Developer Portal
+- Configure webhook URL in Meta Developer Portal to: `https://your-function-url.doserverless.co/webhook`
+- Set environment variables:
+WHATSAPP_PROVIDER=WHATSAPP WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id WHATSAPP_ACCESS_TOKEN=your_access_token WHATSAPP_VERIFY_TOKEN=your_verify_token
+
+
+The system automatically detects which provider to use based on the WHATSAPP_PROVIDER environment variable or by examining the structure of incoming webhook payloads.
+
 ## WhatsApp Business API Setup
 
 This system uses the WhatsApp Business API directly instead of Wassenger. Follow these steps to set it up:
