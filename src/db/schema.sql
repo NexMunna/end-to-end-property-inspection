@@ -175,9 +175,6 @@ CREATE TABLE IF NOT EXISTS notifications (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
--- Create triggers to update timestamps
-DELIMITER //
-
 -- Add initial demo data for testing
 -- Insert sample users (admin, inspector, customer)
 INSERT INTO users (name, email, phone, role, whatsapp_id)
@@ -214,5 +211,3 @@ VALUES
 INSERT INTO work_orders (contract_id, inspector_id, checklist_template_id, scheduled_date, scheduled_time_window, status, notes)
 VALUES 
   (1, 2, 1, DATE_ADD(CURRENT_DATE, INTERVAL 1 DAY), '9:00 AM - 12:00 PM', 'scheduled', 'Regular monthly inspection');
-
-DELIMITER ;

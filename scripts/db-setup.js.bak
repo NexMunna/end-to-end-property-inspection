@@ -11,7 +11,7 @@ const {
   DB_PORT = '3306',
   DB_USER = 'root',
   DB_PASSWORD = 'mysql',
-  DB_NAME = 'defaultdb'
+  DB_NAME = 'property_stewards'
 } = process.env;
 
 async function setupDatabase() {
@@ -48,15 +48,7 @@ async function setupDatabase() {
         .filter(statement => statement.trim().length > 0);
 
       for (const statement of statements) {
-        try {
-          // Replace INSERT with INSERT IGNORE to handle duplicates gracefully
-          const modifiedStatement = statement.replace(/INSERT INTO/gi, 'INSERT IGNORE INTO');
-          await connection.query(modifiedStatement);
-        } catch (err) {
-          console.warn(`⚠️ Warning in schema statement: ${err.message}`);
-          console.warn('Statement:', statement.substring(0, 100) + '...');
-          // Continue executing other statements despite errors
-        }
+        await connection.query(statement);
       }
       console.log('✅ Database schema applied successfully');
     } else {
@@ -84,8 +76,8 @@ async function setupDatabase() {
           try {
             await connection.query(statement);
           } catch (err) {
-            console.warn(`⚠️ Warning in migration ${migrationFile}:`, err.message);
-            // Continue executing other statements despite errors
+            console.error(`❌ Error in migration ${migrationFile}:`, err.message);
+            throw err;
           }
         }
         console.log(`✅ Migration ${migrationFile} applied successfully`);
