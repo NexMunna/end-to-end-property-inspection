@@ -3,8 +3,7 @@ name: Deploy Property Stewards to DigitalOcean Functions
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -23,7 +22,7 @@ jobs:
     - name: Install dependencies
       run: npm ci
     
-    - name: Run tests (if any)
+    - name: Run tests
       run: npm test || echo "No tests configured"
     
     - name: Install doctl
@@ -46,15 +45,18 @@ jobs:
         EOF
     
     - name: Connect to DigitalOcean Functions
-      run: doctl serverless connect
+      run: |
+        doctl serverless connect
     
     - name: Deploy to DigitalOcean Functions
-      run: doctl serverless deploy . --env .env
+      run: |
+        doctl serverless deploy . --env .env
     
     - name: Get function URL
       id: get_url
       run: |
-        URL=$(doctl serverless functions get property_stewards/api --url)
+        sleep 10  # Wait for deployment to complete
+        URL=$(doctl serverless functions get property_stewards/api --url || echo "URL not available")
         echo "function_url=$URL" >> $GITHUB_OUTPUT
     
     - name: Display deployment info
