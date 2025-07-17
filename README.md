@@ -178,3 +178,5 @@ The system uses the following key tables:
 ## License
 
 ISC
+
+[![Deploy to DigitalOcean Functions](https://github.com/your-username/end-to-end-property-inspection-system/actions/workflows/deploy.yml/badge.svg)](https://github.com/your-username/end-to-end-property-inspection-system/actions/workflows/deploy.yml)
