@@ -1,0 +1,36 @@
+{
+  "name": "property-stewards-inspector-interface",
+  "version": 1,
+  "functions": [
+    {
+      "name": "property-inspector-webhook",
+      "source_dir": ".",
+      "trigger": {
+        "type": "http",
+        "provider": "digitalocean",
+        "name": "webhook"
+      },
+      "web": true,
+      "environment": {
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+        "WASSENGER_API_KEY": "${WASSENGER_API_KEY}",
+        "WASSENGER_DEVICE_ID": "${WASSENGER_DEVICE_ID}",
+        "DB_HOST": "${DB_HOST}",
+        "DB_PORT": "${DB_PORT}",
+        "DB_USER": "${DB_USER}",
+        "DB_PASSWORD": "${DB_PASSWORD}",
+        "DB_NAME": "${DB_NAME}"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "path": "/webhook",
+      "function": "property-inspector-webhook"
+    },
+    {
+      "path": "/health",
+      "function": "property-inspector-webhook"
+    }
+  ]
+}

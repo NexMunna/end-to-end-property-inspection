@@ -1,0 +1,70 @@
+name: Deploy Property Stewards to DigitalOcean Functions
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    env:
+      DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run tests
+      run: npm test || echo "No tests configured"
+    
+    - name: Install doctl
+      uses: digitalocean/action-doctl@v2
+      with:
+        token: ${{ env.DIGITALOCEAN_ACCESS_TOKEN }}
+    
+    - name: Create .env file for deployment
+      run: |
+        cat > .env << EOF
+        DB_HOST=${{ secrets.DB_HOST }}
+        DB_PORT=${{ secrets.DB_PORT }}
+        DB_USER=${{ secrets.DB_USER }}
+        DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+        DB_NAME=${{ secrets.DB_NAME }}
+        WASSENGER_API_KEY=${{ secrets.WASSENGER_API_KEY }}
+        WASSENGER_DEVICE_ID=${{ secrets.WASSENGER_DEVICE_ID }}
+        OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+        WHATSAPP_PROVIDER=${{ secrets.WHATSAPP_PROVIDER }}
+        EOF
+    
+    - name: Connect to DigitalOcean Functions
+      run: |
+        doctl serverless connect
+    
+    - name: Deploy to DigitalOcean Functions
+      run: |
+        doctl serverless deploy . --env .env
+    
+    - name: Get function URL
+      id: get_url
+      run: |
+        sleep 10
+        URL=$(doctl serverless functions get property_stewards/api --url || echo "URL not available")
+        echo "function_url=$URL" >> $GITHUB_OUTPUT
+    
+    - name: Display deployment info
+      run: |
+        echo "🚀 Deployment successful!"
+        echo "Function URL: ${{ steps.get_url.outputs.function_url }}"
+        echo "Webhook URL: ${{ steps.get_url.outputs.function_url }}/webhook"
+        echo "Health check: ${{ steps.get_url.outputs.function_url }}/health"

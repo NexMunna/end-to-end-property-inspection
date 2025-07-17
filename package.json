@@ -1,0 +1,39 @@
+{
+  "name": "property-stewards-inspector-interface",
+  "version": "1.0.0",
+  "description": "WhatsApp-based property inspection management system for inspectors",
+  "main": "index.js",
+  "engines": {
+    "node": "18.x"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "deploy": "powershell -Command \"Get-ChildItem -Exclude node_modules,.git,.github,.env,function.zip,package.zip | Compress-Archive -DestinationPath function.zip -Force; Get-ChildItem function.zip | Select-Object Name, Length\"",
+    "deploy:unix": "zip -r function.zip * -x \"node_modules/*\" \".git/*\" \".env\" \"function.zip\" \"package.zip\"",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "db:setup": "node scripts/db-setup.js"
+  },
+  "keywords": [
+    "property",
+    "inspection",
+    "whatsapp",
+    "digitalocean",
+    "serverless"
+  ],
+  "author": "Property Stewards",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.6.7",
+    "body-parser": "^1.20.2",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "form-data": "^4.0.0",
+    "mysql2": "^3.14.2",
+    "openai": "^4.28.0",
+    "pdfkit": "^0.14.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
