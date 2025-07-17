@@ -25,10 +25,20 @@ jobs:
     - name: Run tests
       run: npm test || echo "No tests configured"
     
+    - name: Debug - Check if token exists
+      run: |
+        if [ -z "${{ secrets.DIGITALOCEAN_TOKEN }}" ]; then
+          echo "❌ DIGITALOCEAN_TOKEN is empty or not set"
+        else
+          echo "✅ DIGITALOCEAN_TOKEN is set (length: ${#DIGITALOCEAN_TOKEN})"
+        fi
+      env:
+        DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+    
     - name: Install doctl
       uses: digitalocean/action-doctl@v2
       with:
-        token: ${{ secrets.DIGITALOCEAN_TOKEN}}
+        token: ${{ secrets.DIGITALOCEAN_TOKEN }}
     
     - name: Create .env file for deployment
       run: |
@@ -55,7 +65,7 @@ jobs:
     - name: Get function URL
       id: get_url
       run: |
-        sleep 10  # Wait for deployment to complete
+        sleep 10
         URL=$(doctl serverless functions get property_stewards/api --url || echo "URL not available")
         echo "function_url=$URL" >> $GITHUB_OUTPUT
     
