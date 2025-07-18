@@ -19,7 +19,16 @@
         "DB_PORT": "${DB_PORT}",
         "DB_USER": "${DB_USER}",
         "DB_PASSWORD": "${DB_PASSWORD}",
-        "DB_NAME": "${DB_NAME}"
+        "DB_NAME": "${DB_NAME}",
+        "WHATSAPP_PROVIDER": "${WHATSAPP_PROVIDER}",
+        "WHATSAPP_API_URL": "${WHATSAPP_API_URL}",
+        "WHATSAPP_BUSINESS_ACCOUNT_ID": "${WHATSAPP_BUSINESS_ACCOUNT_ID}",
+        "WHATSAPP_VERIFY_TOKEN": "${WHATSAPP_VERIFY_TOKEN}",
+        "WHATSAPP_PHONE_NUMBER_ID": "${WHATSAPP_PHONE_NUMBER_ID}",
+        "WHATSAPP_ACCESS_TOKEN": "${WHATSAPP_ACCESS_TOKEN}",
+        "DIGITALOCEAN_TOKEN": "${DIGITALOCEAN_TOKEN}",
+        "sslmode": "${sslmode}",
+        "NODE_ENV": "production"
       }
     }
   ],
