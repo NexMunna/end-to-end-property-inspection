@@ -41,24 +41,28 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Test database connection for local development
-if (process.env.NODE_ENV !== 'production') {
-  const PORT = process.env.PORT || 8080;
-  
-  (async function testDatabaseConnection() {
-    try {
+// Start server
+const PORT = process.env.PORT || 8080;
+
+(async function startServer() {
+  try {
+    // Test database connection in production
+    if (process.env.NODE_ENV === 'production') {
       await db.query('SELECT 1');
       logger.info('Database connection successful');
-      
-      app.listen(PORT, () => {
-        logger.info(`Server running on port ${PORT}`);
-      });
-    } catch (error) {
-      logger.error('Database connection failed:', error);
+    }
+    
+    app.listen(PORT, () => {
+      logger.info(`Server running on port ${PORT}`);
+    });
+  } catch (error) {
+    logger.error('Database connection failed:', error);
+    // Don't exit in production, let App Platform handle retries
+    if (process.env.NODE_ENV !== 'production') {
       process.exit(1);
     }
-  })();
-}
+  }
+})();
 
 // For DigitalOcean Functions - export the app
 module.exports = app;
