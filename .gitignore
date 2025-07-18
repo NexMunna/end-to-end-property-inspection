@@ -52,5 +52,3 @@ jspm_packages/
 .eslintcache
 
 # Deployment packages
-.env
-.env.*

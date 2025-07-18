@@ -41,14 +41,15 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Test database connection before starting server (for local development)
+// Test database connection for local development
 if (process.env.NODE_ENV !== 'production') {
+  const PORT = process.env.PORT || 8080;
+  
   (async function testDatabaseConnection() {
     try {
       await db.query('SELECT 1');
       logger.info('Database connection successful');
       
-      const PORT = process.env.PORT || 8080;
       app.listen(PORT, () => {
         logger.info(`Server running on port ${PORT}`);
       });
@@ -59,5 +60,5 @@ if (process.env.NODE_ENV !== 'production') {
   })();
 }
 
-// For DigitalOcean Functions
+// For DigitalOcean Functions - export the app
 module.exports = app;
